@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="ro">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+<meta name="color-scheme" content="dark" />
+<title>Nexus</title>
+<link rel="icon" href="data:," />
+<link rel="stylesheet" href="styles.css" />
+<script type="importmap">
+{
+  "imports": {
+    "three": "./lib/three.module.js",
+    "three/examples/jsm/loaders/GLTFLoader.js": "./lib/GLTFLoader.js",
+    "@pixiv/three-vrm": "./lib/three-vrm.module.js"
+  }
+}
+</script>
+</head>
+<body>
+  <div id="stage">
+    <canvas id="avatar-canvas"></canvas>
+    <div id="vignette"></div>
+    <div id="glow"></div>
+  </div>
+
+  <div id="loader" class="overlay">
+    <div class="pulse-ring"></div>
+    <p id="loader-text">Nexus se trezește…</p>
+  </div>
+
+  <header id="topbar">
+    <div id="status-pill" class="pill">
+      <span id="status-dot" class="dot"></span>
+      <span id="status-text">Nexus</span>
+    </div>
+    <div class="top-actions">
+      <button id="btn-history" class="icon-btn" aria-label="Conversație">
+        <svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
+      </button>
+      <button id="btn-settings" class="icon-btn" aria-label="Setări">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M12 3v2.2M12 18.8V21M3 12h2.2M18.8 12H21M5.6 5.6l1.6 1.6M16.8 16.8l1.6 1.6M18.4 5.6l-1.6 1.6M7.2 16.8l-1.6 1.6"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <footer id="dock">
+    <div id="caption-wrap">
+      <p id="caption" class="hidden-caption"></p>
+    </div>
+    <div id="mic-level"><span></span></div>
+    <div class="dock-row">
+      <button id="btn-mic" class="mic-btn" aria-label="Microfon">
+        <svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3"/></svg>
+      </button>
+      <div class="input-shell">
+        <input id="text-input" type="text" autocomplete="off" autocorrect="off"
+               spellcheck="false" placeholder="Scrie-i lui Nexus…" />
+        <button id="btn-send" class="send-btn" aria-label="Trimite">
+          <svg viewBox="0 0 24 24"><path d="M4 12l16-8-6 8 6 8z"/></svg>
+        </button>
+      </div>
+    </div>
+  </footer>
+
+  <section id="panel-history" class="panel">
+    <div class="panel-head">
+      <h2>Conversație</h2>
+      <button class="ghost-btn" id="btn-close-history">Închide</button>
+    </div>
+    <div id="history-list" class="panel-body"></div>
+    <div class="panel-foot">
+      <button class="danger-btn" id="btn-clear-history">Șterge istoricul</button>
+    </div>
+  </section>
+
+  <section id="panel-settings" class="panel">
+    <div class="panel-head">
+      <h2>Setări</h2>
+      <button class="ghost-btn" id="btn-close-settings">Închide</button>
+    </div>
+    <div class="panel-body" id="settings-body">
+
+      <div class="group">
+        <label class="group-title">Limbă</label>
+        <div class="segmented" id="seg-language">
+          <button data-value="auto">Auto</button>
+          <button data-value="ro">Română</button>
+          <button data-value="en">English</button>
+          <button data-value="hu">Magyar</button>
+        </div>
+      </div>
+
+      <div class="group">
+        <label class="group-title">Voce</label>
+        <div class="row"><span>Voce activă</span><label class="switch"><input type="checkbox" data-setting="voiceEnabled"><i></i></label></div>
+        <div class="row"><span>Volum</span><input type="range" min="0" max="1" step="0.05" data-setting="voiceVolume"></div>
+        <div class="row"><span>Viteză vorbire</span><input type="range" min="0.8" max="1.2" step="0.02" data-setting="speechRate"></div>
+        <div class="row"><span>Ascultă din nou automat</span><label class="switch"><input type="checkbox" data-setting="autoListen"><i></i></label></div>
+      </div>
+
+      <div class="group">
+        <label class="group-title">Avatar</label>
+        <div class="row"><span>Intensitate animații</span><input type="range" min="0" max="1" step="0.05" data-setting="animationIntensity"></div>
+        <div class="row"><span>Lip Sync</span><label class="switch"><input type="checkbox" data-setting="lipSync"><i></i></label></div>
+        <div class="row"><span>Mișcarea ochilor</span><label class="switch"><input type="checkbox" data-setting="eyeMovement"><i></i></label></div>
+        <div class="row"><span>Efecte vizuale</span><label class="switch"><input type="checkbox" data-setting="visualEffects"><i></i></label></div>
+        <div class="row"><span>Reduce Motion</span><label class="switch"><input type="checkbox" data-setting="reduceMotion"><i></i></label></div>
+      </div>
+
+      <div class="group">
+        <label class="group-title">Cameră</label>
+        <div class="row"><span>Acces cameră frontală</span><label class="switch"><input type="checkbox" data-setting="cameraAccess"><i></i></label></div>
+        <p class="hint">Opțional. Nexus o folosește doar pentru context vizual și nu afirmă niciodată cu certitudine ce simți.</p>
+      </div>
+
+      <div class="group">
+        <label class="group-title">Memorie</label>
+        <div id="memory-list" class="memory-list"></div>
+        <button class="danger-btn" id="btn-reset-memory">Resetează memoria lui Nexus</button>
+      </div>
+    </div>
+  </section>
+
+  <div id="toast"></div>
+
+  <script src="boot-check.js"></script>
+  <script type="module" src="app.js"></script>
+</body>
+</html>

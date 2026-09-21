@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="nexus_bg">#FF06070A</color>
+    <color name="nexus_bg_soft">#FF0C0E13</color>
+    <color name="nexus_accent">#FF8FB7FF</color>
+    <color name="ic_launcher_background">#FF06070A</color>
+</resources>
