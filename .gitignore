@@ -1,0 +1,208 @@
+============================================================
+
+Nexus — Android / Kotlin / WebView
+
+============================================================
+
+--- Android Studio / IntelliJ ---
+
+.idea/
+*.iml
+*.ipr
+*.iws
+
+--- Android local configuration ---
+
+local.properties
+
+--- Gradle ---
+
+.gradle/
+build/
+*/build/
+captures/
+
+--- Android build outputs ---
+
+*.apk
+*.aab
+*.apks
+*.idsig
+
+--- Signing / keystores ---
+
+*.jks
+*.keystore
+*.p12
+*.pfx
+*.key
+
+--- Signing / release credentials ---
+
+keystore.properties
+signing.properties
+
+============================================================
+
+Secrets / Environment
+
+============================================================
+
+.env
+.env.*
+!.env.example
+
+API keys / credentials
+
+secrets/
+secret/
+credentials/
+*.secret
+*.secrets
+*.credentials
+
+Firebase / Google credentials
+
+google-services.json
+firebase-adminsdk-.json
+service-account.json
+
+============================================================
+
+Kotlin / Java
+
+============================================================
+
+*.class
+out/
+.kotlin/
+.kotlin-js/
+
+============================================================
+
+Node / WebView assets
+
+============================================================
+
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+Package manager caches
+
+.npm/
+.yarn/
+.pnpm-store/
+
+============================================================
+
+Temporary / generated files
+
+============================================================
+
+*.tmp
+*.temp
+*.bak
+*.backup
+*.old
+*.orig
+*.swp
+*.swo
+
+OS files
+
+.DS_Store
+Thumbs.db
+desktop.ini
+
+============================================================
+
+Logs
+
+============================================================
+
+*.log
+logs/
+
+============================================================
+
+Editor
+
+============================================================
+
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+
+============================================================
+
+Local development files
+
+============================================================
+
+.local
+.local.json
+config.local.
+settings.local.
+
+============================================================
+
+Crash / profiling / debug data
+
+============================================================
+
+*.hprof
+*.prof
+*.trace
+
+============================================================
+
+Backup archives
+
+============================================================
+
+*.zip
+*.rar
+*.7z
+*.tar
+*.gz
+
+============================================================
+
+Nexus local/private data
+
+============================================================
+
+/private/
+/local/
+/secrets/
+/credentials/
+*.private
+*.private.json
+
+Local test data
+
+/test-data/
+/test-data-local/
+
+============================================================
+
+Generated WebView/cache data
+
+============================================================
+
+webview-cache/
+cache/
+temp/
+tmp/
+
+============================================================
+
+Keep example configuration files
+
+============================================================
+
+!.env.example
+!**/.gitkeep

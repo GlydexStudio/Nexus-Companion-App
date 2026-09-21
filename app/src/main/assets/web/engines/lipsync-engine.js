@@ -1,25 +1,11 @@
 /**
- * Nexus Lip Sync Engine
+ * Natural Nexus Lip Sync
  *
- * VRM 0.x / VRoid compatible lip-sync.
+ * Primary timing source: ElevenLabs character alignment.
+ * Audio analysis only controls energy/opening, while text alignment controls
+ * WHICH mouth shape is active. This prevents the classic "random vowel loop".
  *
- * Important pentru modelele Nexus / Lyra / Dante:
- * - NU există jaw bone => nu folosim jawOpen.
- * - Vocalele reale sunt morph-uri A / I / U / E / O.
- * - Indicii morph-urilor NU sunt hardcodati.
- * - Dacă stage-ul expune hasExpression(), motorul preferă numele
- *   reale VRM și cade înapoi pe aliasurile semantice.
- *
- * Nexus / Lyra:
- *   A/I/U/E/O -> morph targets vocale
- *
- * Dante:
- *   aceleași vocale, dar indexurile diferă.
- *
- * ElevenLabs alignment:
- *   este folosit atunci când există.
- * Spectral analysis:
- *   fallback pentru situațiile în care alignment-ul nu este disponibil.
+ * No jaw bone exists on the VRoid models, so everything is morph based.
  */
 
 const VISEMES = ['aa', 'ih', 'ou', 'ee', 'oh'];
@@ -32,64 +18,56 @@ const VRM_VISEME_NAMES = {
   oh: ['O', 'oh']
 };
 
-const VRM_MOUTH_NAMES = {
+const MOUTH_NAMES = {
   large: ['MTH_Large'],
   small: ['MTH_Small'],
   up: ['MTH_Up'],
   down: ['MTH_Down']
 };
 
+const OPEN_SCALE = { aa: 1.00, oh: 0.92, ee: 0.84, ih: 0.72, ou: 0.66 };
+
+const BILABIAL = new Set(['m', 'b', 'p']);
+const LABIODENTAL = new Set(['f', 'v']);
+const FRICATIVE = new Set(['s', 'ș', 'ş', 'j', 'ž', 'z', 'ț', 'ţ', 'c']);
+
+function clamp(v, a = 0, b = 1) { return Math.max(a, Math.min(b, v)); }
+function smoothstep(a, b, x) {
+  const t = clamp((x - a) / Math.max(0.0001, b - a));
+  return t * t * (3 - 2 * t);
+}
+
 export class LipSyncEngine {
   constructor(stage = null) {
     this.stage = stage;
-
     this.analyser = null;
     this.freq = null;
     this.time = null;
     this.sampleRate = 44100;
-
     this.enabled = true;
     this.talking = false;
-
-    this.openness = 0;
-    this.energy = 0;
-    this.lowEnergy = 0;
-    this.midEnergy = 0;
-    this.highEnergy = 0;
-
-    this.weights = {
-      aa: 0,
-      ih: 0,
-      ou: 0,
-      ee: 0,
-      oh: 0
-    };
-
-    this._lastCentroid = 1200;
-    this._fallbackTime = 0;
-
     this.alignment = null;
-    this._alignedVowels = [];
-    this._lastAlignedViseme = null;
+    this.events = [];
+    this.weights = { aa: 0, ih: 0, ou: 0, ee: 0, oh: 0 };
+    this._mouth = { large: 0, small: 0, up: 0, down: 0 };
+    this._envelope = 0;
+    this._energy = 0;
+    this._lastTime = 0;
+    this._lastIndex = 0;
   }
 
-  setStage(stage) {
-    this.stage = stage || null;
-  }
+  setStage(stage) { this.stage = stage || null; }
 
   attach(analyser, sampleRate) {
     this.analyser = analyser || null;
-
     if (!analyser) {
       this.freq = null;
       this.time = null;
+      this.sampleRate = sampleRate || 44100;
       return;
     }
-
-    // Reuse buffers: zero allocations inside update().
     this.freq = new Uint8Array(analyser.frequencyBinCount);
     this.time = new Uint8Array(analyser.fftSize);
-
     this.sampleRate = sampleRate || 44100;
   }
 
@@ -99,765 +77,239 @@ export class LipSyncEngine {
     this.time = null;
   }
 
-  setTalking(v) {
-    this.talking = !!v;
-  }
-
-  setEnabled(v) {
-    this.enabled = !!v;
-  }
+  setTalking(v) { this.talking = !!v; }
+  setEnabled(v) { this.enabled = !!v; }
 
   setAlignment(alignment) {
     this.alignment = alignment || null;
-    this._alignedVowels = [];
-    this._lastAlignedViseme = null;
-
+    this.events = [];
+    this._lastIndex = 0;
     if (!alignment) return;
 
     const chars = alignment.characters || [];
-    const starts =
-      alignment.character_start_times_seconds || [];
-    const ends =
-      alignment.character_end_times_seconds || [];
-
-    const visemeFor = (ch) => {
-      switch ((ch || '').toLowerCase()) {
-        case 'a':
-        case 'ă':
-        case 'â':
-          return 'aa';
-
-        case 'e':
-          return 'ee';
-
-        case 'i':
-        case 'î':
-        case 'y':
-          return 'ih';
-
-        case 'o':
-          return 'oh';
-
-        case 'u':
-          return 'ou';
-
-        default:
-          return null;
-      }
-    };
+    const starts = alignment.character_start_times_seconds || [];
+    const ends = alignment.character_end_times_seconds || [];
 
     for (let i = 0; i < chars.length; i++) {
-      const viseme = visemeFor(chars[i]);
+      const ch = String(chars[i] || '').toLowerCase();
       const start = Number(starts[i]);
       const end = Number(ends[i]);
+      if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) continue;
 
-      if (
-        viseme &&
-        Number.isFinite(start) &&
-        Number.isFinite(end) &&
-        end >= start
-      ) {
-        this._alignedVowels.push({
-          start,
-          end,
-          viseme
-        });
-      }
+      let type = 'silence';
+      let viseme = null;
+      if ('aăâ'.includes(ch)) { type = 'vowel'; viseme = 'aa'; }
+      else if (ch === 'e') { type = 'vowel'; viseme = 'ee'; }
+      else if ('iîıy'.includes(ch)) { type = 'vowel'; viseme = 'ih'; }
+      else if (ch === 'o') { type = 'vowel'; viseme = 'oh'; }
+      else if (ch === 'u') { type = 'vowel'; viseme = 'ou'; }
+      else if (BILABIAL.has(ch)) type = 'bilabial';
+      else if (LABIODENTAL.has(ch)) type = 'labiodental';
+      else if (FRICATIVE.has(ch)) type = 'fricative';
+      else if (/^[a-zăâîșşțţjž]$/i.test(ch)) type = 'consonant';
+
+      this.events.push({ start, end, type, viseme, ch });
     }
+
+    this.events.sort((a, b) => a.start - b.start);
   }
 
-  /**
-   * Scrie un morph în out folosind numele real VRM atunci când
-   * stage-ul poate verifica existența expresiei.
-   *
-   * semantic:
-   *   aa / ih / ou / ee / oh
-   *
-   * real:
-   *   A / I / U / E / O
-   */
-  _writeViseme(out, viseme, weight) {
-    const candidates = VRM_VISEME_NAMES[viseme] || [viseme];
-
-    const resolved = this._resolveExpression(candidates);
-
-    if (resolved) {
-      out[resolved] = (out[resolved] || 0) + weight;
-      return;
-    }
-
-    // Fallback pentru un Stage care încă folosește aliasurile vechi.
-    out[viseme] = (out[viseme] || 0) + weight;
-  }
-
-  _writeMouth(out, type, weight) {
-    if (weight <= 0.001) return;
-
-    const candidates = VRM_MOUTH_NAMES[type] || [];
-    const resolved = this._resolveExpression(candidates);
-
-    if (resolved) {
-      out[resolved] = Math.max(out[resolved] || 0, weight);
-    }
-  }
-
-  _resolveExpression(candidates) {
-    if (!this.stage || typeof this.stage.hasExpression !== 'function') {
-      return null;
-    }
-
-    for (const name of candidates) {
-      if (this.stage.hasExpression(name)) {
-        return name;
-      }
-    }
-
+  _resolve(candidates) {
+    if (!this.stage || typeof this.stage.hasExpression !== 'function') return null;
+    for (const name of candidates) if (this.stage.hasExpression(name)) return name;
     return null;
   }
 
-  update(dt, out, audioTime = null) {
-    const frame = Math.min(
-      0.05,
-      Math.max(0.001, dt)
-    );
-
-    if (!this.talking || !this.enabled) {
-      const closeRate =
-        1 - Math.pow(0.045, frame);
-
-      this.openness +=
-        (0 - this.openness) * closeRate;
-
-      for (const v of VISEMES) {
-        this.weights[v] +=
-          (0 - this.weights[v]) * closeRate;
-
-        if (this.weights[v] > 0.002) {
-          this._writeViseme(
-            out,
-            v,
-            this.weights[v]
-          );
-        }
-      }
-
-      // No jawOpen here.
-      // We optionally use a tiny mouth morph during release.
-      if (this.openness > 0.002) {
-        this._writeMouth(
-          out,
-          'small',
-          Math.min(
-            0.12,
-            this.openness * 0.10
-          )
-        );
-      }
-
-      return out;
-    }
-
-    const signal = this._analyseSignal();
-
-    const speech =
-      this._speechAmount(signal.level);
-
-    const targetOpen = Math.min(
-      0.88,
-      Math.pow(
-        Math.max(0, speech) * 1.85,
-        0.78
-      )
-    );
-
-    const openRate =
-      targetOpen > this.openness
-        ? 1 - Math.pow(0.012, frame)
-        : 1 - Math.pow(0.035, frame);
-
-    this.openness +=
-      (targetOpen - this.openness) * openRate;
-
-    /**
-     * Articulation:
-     *
-     * High frequency consonants narrow the mouth.
-     * Mid/low energy supports fuller vowel shapes.
-     */
-    const articulation = Math.max(
-      0.72,
-      Math.min(
-        1.10,
-        0.92 +
-          signal.mid * 0.22 -
-          signal.high * 0.10 +
-          Math.sin(
-            signal.centroid * 0.0009
-          ) * 0.015
-      )
-    );
-
-    const vowelOpen = Math.max(
-      0,
-      Math.min(
-        1,
-        this.openness * articulation
-      )
-    );
-
-    const alignedViseme =
-      this._alignedVisemeAt(audioTime);
-
-    const targets = alignedViseme
-      ? this._alignedTargets(
-          alignedViseme,
-          vowelOpen
-        )
-      : this._vowelTargets(
-          signal.centroid,
-          signal.low,
-          signal.mid,
-          signal.high,
-          vowelOpen
-        );
-
-    for (const v of VISEMES) {
-      const target = targets[v] || 0;
-
-      const rate =
-        target > this.weights[v]
-          ? 1 - Math.pow(0.018, frame)
-          : 1 - Math.pow(0.035, frame);
-
-      this.weights[v] +=
-        (target - this.weights[v]) * rate;
-
-      if (this.weights[v] > 0.003) {
-        this._writeViseme(
-          out,
-          v,
-          this.weights[v]
-        );
-      }
-    }
-
-    /**
-     * Secondary mouth articulation.
-     *
-     * Because the models have no jaw bone, this acts as a subtle
-     * secondary deformation layer.
-     */
-    const mouthLayer =
-      vowelOpen *
-      (
-        0.10 +
-        signal.mid * 0.06
-      );
-
-    this._writeMouth(
-      out,
-      'large',
-      Math.min(
-        0.16,
-        mouthLayer
-      )
-    );
-
-    /**
-     * Slight vertical articulation.
-     *
-     * We keep it very weak so that MTH_Up / MTH_Down don't
-     * fight the vowel morphs.
-     */
-    const vertical =
-      Math.max(
-        -1,
-        Math.min(
-          1,
-          (signal.mid - signal.low) * 1.6
-        )
-      );
-
-    if (vertical > 0.08) {
-      this._writeMouth(
-        out,
-        'up',
-        Math.min(
-          0.06,
-          vowelOpen * vertical * 0.08
-        )
-      );
-    } else if (vertical < -0.08) {
-      this._writeMouth(
-        out,
-        'down',
-        Math.min(
-          0.06,
-          vowelOpen * Math.abs(vertical) * 0.08
-        )
-      );
-    }
-
-    return out;
+  _write(out, candidates, weight, mode = 'add') {
+    if (weight <= 0.001) return;
+    const name = this._resolve(candidates);
+    if (!name) return;
+    const value = clamp(weight);
+    if (mode === 'max') out[name] = Math.max(out[name] || 0, value);
+    else out[name] = (out[name] || 0) + value;
   }
 
-  _alignedVisemeAt(audioTime) {
-    if (
-      !this._alignedVowels.length ||
-      !Number.isFinite(audioTime)
-    ) {
-      return null;
-    }
-
-    let active = null;
-
-    for (const vowel of this._alignedVowels) {
-      if (
-        audioTime >= vowel.start &&
-        audioTime < vowel.end
-      ) {
-        active = vowel.viseme;
-        break;
-      }
-
-      if (audioTime >= vowel.start) {
-        active = vowel.viseme;
-      } else {
-        break;
-      }
-    }
-
-    this._lastAlignedViseme =
-      active || this._lastAlignedViseme;
-
-    return this._lastAlignedViseme;
-  }
-
-  _alignedTargets(viseme, open) {
-    const out = {
-      aa: 0,
-      ih: 0,
-      ou: 0,
-      ee: 0,
-      oh: 0
-    };
-
-    if (!viseme) return out;
-
-    /**
-     * We intentionally keep a tiny amount of coarticulation.
-     * This avoids hard morph switching when ElevenLabs alignment
-     * changes character.
-     */
-    const primary = Math.min(1, open * 0.86);
-    const secondary = Math.min(1, open * 0.14);
-
-    out[viseme] = primary;
-
-    switch (viseme) {
-      case 'aa':
-        out.oh = secondary;
-        break;
-
-      case 'ih':
-        out.ee = secondary;
-        break;
-
-      case 'ou':
-        out.oh = secondary;
-        break;
-
-      case 'ee':
-        out.ih = secondary;
-        break;
-
-      case 'oh':
-        out.ou = secondary;
-        break;
-    }
-
-    return out;
-  }
-
-  _speechAmount(level) {
-    const gate = 0.028;
-
-    if (level <= gate) {
-      return 0;
-    }
-
-    const x = Math.min(
-      1,
-      (level - gate) / 0.22
-    );
-
-    return x * x * (3 - 2 * x);
-  }
-
-  _analyseSignal() {
-    if (
-      !this.analyser ||
-      !this.time ||
-      !this.freq
-    ) {
-      return this._fallbackSignal();
-    }
-
-    this.analyser.getByteTimeDomainData(
-      this.time
-    );
-
-    this.analyser.getByteFrequencyData(
-      this.freq
-    );
-
+  _readAudio() {
+    if (!this.analyser || !this.time) return { level: 0, mid: 0.35, high: 0.2 };
+    this.analyser.getByteTimeDomainData(this.time);
     let sum = 0;
     let peak = 0;
-
     for (let i = 0; i < this.time.length; i++) {
-      const x =
-        (this.time[i] - 128) / 128;
-
-      const ax = Math.abs(x);
-
+      const x = (this.time[i] - 128) / 128;
       sum += x * x;
+      peak = Math.max(peak, Math.abs(x));
+    }
+    const rms = Math.sqrt(sum / this.time.length);
 
-      if (ax > peak) {
-        peak = ax;
-      }
+    let mid = 0.35;
+    let high = 0.2;
+    if (this.freq) {
+      this.analyser.getByteFrequencyData(this.freq);
+      const binHz = this.sampleRate / 2 / this.freq.length;
+      const band = (lo, hi) => {
+        const a = Math.max(1, Math.floor(lo / binHz));
+        const b = Math.min(this.freq.length - 1, Math.ceil(hi / binHz));
+        let e = 0, n = 0;
+        for (let i = a; i <= b; i++) { const m = this.freq[i] / 255; e += m * m; n++; }
+        return n ? Math.sqrt(e / n) : 0;
+      };
+      mid = band(700, 1800);
+      high = band(1800, 4200);
     }
 
-    const rms = Math.sqrt(
-      sum / this.time.length
-    );
-
-    const level = Math.min(
-      1,
-      rms * 3.05
-    );
-
-    const binHz =
-      this.sampleRate /
-      2 /
-      this.freq.length;
-
-    const bands = {
-      low: [180, 700],
-      mid: [700, 1700],
-      high: [1700, 3600]
-    };
-
-    const bandEnergy = (lo, hi) => {
-      const a = Math.max(
-        1,
-        Math.floor(lo / binHz)
-      );
-
-      const b = Math.min(
-        this.freq.length - 1,
-        Math.ceil(hi / binHz)
-      );
-
-      let e = 0;
-      let n = 0;
-
-      for (let i = a; i <= b; i++) {
-        const m = this.freq[i] / 255;
-        e += m * m;
-        n++;
-      }
-
-      return n
-        ? Math.sqrt(e / n)
-        : 0;
-    };
-
-    const low =
-      bandEnergy(...bands.low);
-
-    const mid =
-      bandEnergy(...bands.mid);
-
-    const high =
-      bandEnergy(...bands.high);
-
-    let num = 0;
-    let den = 0;
-
-    const minBin = Math.max(
-      1,
-      Math.floor(180 / binHz)
-    );
-
-    const maxBin = Math.min(
-      this.freq.length,
-      Math.floor(4200 / binHz)
-    );
-
-    for (
-      let i = minBin;
-      i < maxBin;
-      i++
-    ) {
-      const m =
-        this.freq[i] / 255;
-
-      const w = m * m;
-
-      num +=
-        w * (i * binHz);
-
-      den += w;
-    }
-
-    const rawCentroid =
-      den > 0.00001
-        ? num / den
-        : this._lastCentroid;
-
-    const centroidK =
-      1 -
-      Math.pow(
-        0.018,
-        Math.min(
-          0.05,
-          Math.max(
-            0.001,
-            1 / 60
-          )
-        )
-      );
-
-    this._lastCentroid +=
-      (rawCentroid - this._lastCentroid) *
-      centroidK;
-
-    const k = 0.28;
-
-    this.lowEnergy +=
-      (low - this.lowEnergy) * k;
-
-    this.midEnergy +=
-      (mid - this.midEnergy) * k;
-
-    this.highEnergy +=
-      (high - this.highEnergy) * k;
-
-    this.energy +=
-      (level - this.energy) * 0.32;
-
-    return {
-      level: this.energy,
-      low: this.lowEnergy,
-      mid: this.midEnergy,
-      high: this.highEnergy,
-      centroid: this._lastCentroid,
-      peak
-    };
+    return { level: clamp(rms * 3.8), peak, mid, high };
   }
 
-  _vowelTargets(
-    centroid,
-    low,
-    mid,
-    high,
-    open
-  ) {
-    const c = Math.max(
-      250,
-      Math.min(3300, centroid)
-    );
+  _findEvent(time) {
+    if (!this.events.length || !Number.isFinite(time)) return null;
+    let i = this._lastIndex;
+    if (time < this._lastTime) i = 0;
+    while (i < this.events.length - 1 && time >= this.events[i].end) i++;
+    while (i > 0 && time < this.events[i].start) i--;
+    this._lastIndex = i;
+    this._lastTime = time;
+    const current = this.events[i];
+    const prev = i > 0 ? this.events[i - 1] : null;
+    const next = i + 1 < this.events.length ? this.events[i + 1] : null;
+    return { current, prev, next };
+  }
 
-    const g = (
-      x,
-      center,
-      width
-    ) => {
-      const d =
-        (x - center) / width;
+  _eventBlend(time) {
+    const found = this._findEvent(time);
+    if (!found) return null;
+    const { current, prev, next } = found;
+    let primary = current;
+    let secondary = null;
+    let secondaryAmount = 0;
+    const edge = 0.045;
 
-      return Math.exp(
-        -0.5 * d * d
-      );
-    };
-
-    let s = {
-      ou: g(c, 480, 330),
-      oh: g(c, 760, 430),
-      aa: g(c, 1250, 600),
-      ee: g(c, 2050, 720),
-      ih: g(c, 2850, 850)
-    };
-
-    const lowMid =
-      low / Math.max(0.035, mid);
-
-    const highMid =
-      high / Math.max(0.035, mid);
-
-    s.ou *=
-      0.82 +
-      Math.min(
-        0.60,
-        lowMid * 0.55
-      );
-
-    s.oh *=
-      0.90 +
-      Math.min(
-        0.42,
-        lowMid * 0.35
-      );
-
-    s.aa *=
-      0.94 +
-      Math.min(
-        0.25,
-        mid * 0.30
-      );
-
-    s.ee *=
-      0.86 +
-      Math.min(
-        0.55,
-        highMid * 0.48
-      );
-
-    s.ih *=
-      0.82 +
-      Math.min(
-        0.62,
-        highMid * 0.55
-      );
-
-    let sum = 0;
-
-    for (const v of VISEMES) {
-      sum += s[v];
+    if (current && time < current.start) {
+      primary = prev || current;
     }
 
-    if (sum <= 0.0001) {
-      s = {
-        aa: 1,
-        ih: 0,
-        ou: 0,
-        ee: 0,
-        oh: 0
-      };
-
-      sum = 1;
-    }
-
-    const dominant =
-      VISEMES.reduce(
-        (a, b) =>
-          s[a] > s[b]
-            ? a
-            : b
-      );
-
-    const dominantShare = 0.74;
-
-    const out = {};
-
-    for (const v of VISEMES) {
-      const p =
-        s[v] / sum;
-
-      out[v] =
-        open *
-        (
-          v === dominant
-            ? dominantShare +
-              p *
-                (1 - dominantShare)
-            : p *
-              (1 - dominantShare)
-        );
-    }
-
-    if (open < 0.03) {
-      for (const v of VISEMES) {
-        out[v] *=
-          open / 0.03;
+    if (primary && primary.type === 'vowel') {
+      if (next && next.type === 'vowel' && time >= primary.end - edge) {
+        secondary = next;
+        secondaryAmount = smoothstep(primary.end - edge, primary.end, time);
+      } else if (prev && prev.type === 'vowel' && time <= primary.start + edge) {
+        secondary = primary;
+        primary = prev;
+        secondaryAmount = 1 - smoothstep(primary.end, primary.end + edge, time);
       }
+    } else if (next && next.type === 'vowel' && time >= current.end - edge) {
+      primary = current;
+      secondary = next;
+      secondaryAmount = smoothstep(current.end - edge, current.end, time);
     }
 
+    return { primary, secondary, secondaryAmount };
+  }
+
+  update(dt, out, audioTime = null) {
+    const frame = clamp(dt, 0.001, 0.05);
+    if (!this.talking || !this.enabled) return this._release(frame, out);
+
+    const audio = this._readAudio();
+    const rawPresence = smoothstep(0.012, 0.075, audio.level);
+    const attack = 1 - Math.pow(0.0008, frame);
+    const release = 1 - Math.pow(0.055, frame);
+    const k = rawPresence > this._envelope ? attack : release;
+    this._envelope += (rawPresence - this._envelope) * k;
+    this._energy += (audio.level - this._energy) * (rawPresence > this._envelope ? 0.36 : 0.16);
+
+    // In quiet portions between phonemes, the mouth should visibly close.
+    const voiceEnergy = clamp(this._energy * 1.55);
+    const blend = this._eventBlend(Number(audioTime));
+
+    const targets = { aa: 0, ih: 0, ou: 0, ee: 0, oh: 0 };
+    let mouthOpen = 0;
+    let mouthKind = 'none';
+
+    if (blend && blend.primary) {
+      const e = blend.primary;
+      if (e.type === 'vowel' && e.viseme) {
+        const coart = blend.secondary && blend.secondary.viseme ? blend.secondaryAmount : 0;
+        const primaryWeight = 1 - coart * 0.42;
+        const visemeOpen = 0.18 + 0.80 * voiceEnergy;
+        const shapedOpen = visemeOpen * (OPEN_SCALE[e.viseme] || 0.8);
+        targets[e.viseme] = shapedOpen * primaryWeight;
+        if (blend.secondary && blend.secondary.viseme) targets[blend.secondary.viseme] = shapedOpen * 0.42 * coart;
+        mouthOpen = shapedOpen;
+        mouthKind = shapedOpen > 0.46 ? 'large' : 'small';
+      } else if (e.type === 'bilabial') {
+        mouthOpen = 0.06 + 0.08 * voiceEnergy;
+        mouthKind = 'small';
+      } else if (e.type === 'labiodental' || e.type === 'fricative') {
+        mouthOpen = 0.09 + 0.12 * voiceEnergy;
+        mouthKind = 'small';
+      } else if (e.type === 'consonant') {
+        mouthOpen = 0.08 + 0.16 * voiceEnergy;
+        mouthKind = 'small';
+      } else {
+        mouthOpen = 0.025 + 0.08 * voiceEnergy;
+        mouthKind = 'small';
+      }
+    } else {
+      // No alignment interval: use only the real audio envelope, never a fake oscillator.
+      mouthOpen = 0.015 + 0.12 * voiceEnergy;
+      mouthKind = mouthOpen > 0.07 ? 'small' : 'none';
+    }
+
+    // Stronger A/O opening, softer I/U. Keep a little asymmetry so the face is alive.
+    const asym = 1 + Math.sin((Number(audioTime) || 0) * 7.1) * 0.018;
+    for (const v of VISEMES) {
+      const target = clamp((targets[v] || 0) * asym);
+      const rate = target > this.weights[v] ? 1 - Math.pow(0.0025, frame) : 1 - Math.pow(0.025, frame);
+      this.weights[v] += (target - this.weights[v]) * rate;
+      this._write(out, VRM_VISEME_NAMES[v], this.weights[v]);
+    }
+
+    // Secondary lip deformation is intentionally subtle because vowels already shape the mouth.
+    const large = mouthKind === 'large' ? clamp(mouthOpen * 0.18) : 0;
+    const small = mouthKind === 'small' ? clamp(0.035 + mouthOpen * 0.14) : 0;
+    const up = blend?.primary?.viseme === 'ee' || blend?.primary?.viseme === 'ih' ? clamp(mouthOpen * 0.055) : 0;
+    const down = blend?.primary?.viseme === 'aa' || blend?.primary?.viseme === 'oh' ? clamp(mouthOpen * 0.035) : 0;
+
+    const layers = [
+      ['large', large], ['small', small], ['up', up], ['down', down]
+    ];
+    for (const [type, target] of layers) {
+      const old = this._mouth[type];
+      const rate = target > old ? 1 - Math.pow(0.01, frame) : 1 - Math.pow(0.035, frame);
+      this._mouth[type] = old + (target - old) * rate;
+    }
+
+    this._write(out, MOUTH_NAMES.large, this._mouth.large, 'max');
+    this._write(out, MOUTH_NAMES.small, this._mouth.small, 'max');
+    this._write(out, MOUTH_NAMES.up, this._mouth.up, 'max');
+    this._write(out, MOUTH_NAMES.down, this._mouth.down, 'max');
     return out;
   }
 
-  _fallbackSignal() {
-    this._fallbackTime +=
-      1 / 60;
-
-    const t =
-      this._fallbackTime;
-
-    const envelope =
-      0.34 +
-      0.18 *
-        Math.sin(
-          t * 5.3 + 0.4
-        ) +
-      0.09 *
-        Math.sin(
-          t * 8.7 + 1.8
-        ) +
-      0.045 *
-        Math.sin(
-          t * 13.1 + 2.7
-        );
-
-    const level =
-      Math.max(
-        0.04,
-        Math.min(
-          0.72,
-          envelope
-        )
-      );
-
-    return {
-      level,
-      low:
-        0.16 +
-        0.08 *
-          Math.sin(t * 2.1),
-
-      mid:
-        0.24 +
-        0.10 *
-          Math.sin(
-            t * 4.7 + 0.7
-          ),
-
-      high:
-        0.12 +
-        0.07 *
-          Math.sin(
-            t * 7.9 + 1.4
-          ),
-
-      centroid:
-        1200 +
-        650 *
-          Math.sin(
-            t * 2.6 + 0.5
-          ),
-
-      peak: level
-    };
+  _release(frame, out) {
+    const rate = 1 - Math.pow(0.035, frame);
+    this._envelope += (0 - this._envelope) * rate;
+    this._energy += (0 - this._energy) * rate;
+    for (const v of VISEMES) {
+      this.weights[v] += (0 - this.weights[v]) * rate;
+      this._write(out, VRM_VISEME_NAMES[v], this.weights[v]);
+    }
+    for (const k of Object.keys(this._mouth)) {
+      this._mouth[k] += (0 - this._mouth[k]) * rate;
+    }
+    this._write(out, MOUTH_NAMES.large, this._mouth.large, 'max');
+    this._write(out, MOUTH_NAMES.small, this._mouth.small, 'max');
+    this._write(out, MOUTH_NAMES.up, this._mouth.up, 'max');
+    this._write(out, MOUTH_NAMES.down, this._mouth.down, 'max');
+    return out;
   }
 
   reset() {
-    for (const v of VISEMES) {
-      this.weights[v] = 0;
-    }
-
-    this.openness = 0;
-    this.energy = 0;
-    this.lowEnergy = 0;
-    this.midEnergy = 0;
-    this.highEnergy = 0;
+    this._envelope = 0;
+    this._energy = 0;
+    this._lastTime = 0;
+    this._lastIndex = 0;
+    for (const v of VISEMES) this.weights[v] = 0;
+    for (const k of Object.keys(this._mouth)) this._mouth[k] = 0;
   }
 }

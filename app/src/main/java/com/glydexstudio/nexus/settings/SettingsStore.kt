@@ -4,27 +4,24 @@ import android.content.Context
 import android.content.SharedPreferences
 import org.json.JSONObject
 
-/**
- * Setarile Nexus, persistate local. Sunt citite si de stratul web (WebView)
- * prin bridge, ca sa controleze rendering-ul avatarului.
- */
 class SettingsStore(context: Context) {
 
     private val prefs: SharedPreferences =
         context.getSharedPreferences("nexus_settings", Context.MODE_PRIVATE)
 
     companion object {
-        const val LANGUAGE = "language"              // auto | ro | en | hu
-        const val VOICE_VOLUME = "voiceVolume"       // 0..1
+        const val LANGUAGE = "language"
+        const val VOICE_VOLUME = "voiceVolume"
         const val VOICE_ENABLED = "voiceEnabled"
-        const val SPEECH_RATE = "speechRate"         // 0.8..1.2 (viteza redarii)
-        const val AUTO_LISTEN = "autoListen"         // reasculta dupa ce Nexus termina
-        const val ANIMATION_INTENSITY = "animationIntensity" // 0..1
+        const val SPEECH_RATE = "speechRate"
+        const val AUTO_LISTEN = "autoListen"
+        const val ANIMATION_INTENSITY = "animationIntensity"
         const val LIP_SYNC = "lipSync"
         const val EYE_MOVEMENT = "eyeMovement"
         const val CAMERA_ACCESS = "cameraAccess"
         const val VISUAL_EFFECTS = "visualEffects"
         const val REDUCE_MOTION = "reduceMotion"
+        const val AVATAR_MODEL = "avatarModel"
     }
 
     private val defaults = mapOf<String, Any>(
@@ -38,17 +35,13 @@ class SettingsStore(context: Context) {
         EYE_MOVEMENT to true,
         CAMERA_ACCESS to false,
         VISUAL_EFFECTS to true,
-        REDUCE_MOTION to false
+        REDUCE_MOTION to false,
+        AVATAR_MODEL to "nexus"
     )
 
-    fun getBool(key: String): Boolean =
-        prefs.getBoolean(key, defaults[key] as? Boolean ?: false)
-
-    fun getFloat(key: String): Float =
-        prefs.getFloat(key, defaults[key] as? Float ?: 0f)
-
-    fun getString(key: String): String =
-        prefs.getString(key, defaults[key] as? String ?: "") ?: ""
+    fun getBool(key: String): Boolean = prefs.getBoolean(key, defaults[key] as? Boolean ?: false)
+    fun getFloat(key: String): Float = prefs.getFloat(key, defaults[key] as? Float ?: 0f)
+    fun getString(key: String): String = prefs.getString(key, defaults[key] as? String ?: "") ?: ""
 
     fun set(key: String, value: Any?) {
         val e = prefs.edit()
@@ -61,7 +54,6 @@ class SettingsStore(context: Context) {
         e.apply()
     }
 
-    /** Limba efectiva pentru speech recognition (auto -> limba din ultima interactiune). */
     fun recognizerLocale(detected: String?): String {
         val lang = when (getString(LANGUAGE)) {
             "ro" -> "ro"

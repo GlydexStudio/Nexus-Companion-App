@@ -1,51 +1,21 @@
 {
   "allFiles": [
     {
-      "file": "/storage/emulated/0/CodeOnTheGoProjects/Nexus/app/src/main/assets/web/engines/lipsync-engine.js",
+      "file": "/storage/emulated/0/CodeOnTheGoProjects/Nexus/app/src/main/java/com/glydexstudio/nexus/config/NexusConfig.kt",
       "selection": {
         "end": {
-          "column": 1,
-          "index": 15219,
-          "line": 862
+          "column": 73,
+          "index": 480,
+          "line": 13
         },
         "start": {
-          "column": 1,
-          "index": 15219,
-          "line": 862
-        }
-      }
-    },
-    {
-      "file": "/storage/emulated/0/CodeOnTheGoProjects/Nexus/app/src/main/assets/web/engines/gaze-engine.js",
-      "selection": {
-        "end": {
-          "column": 1,
-          "index": 5984,
-          "line": 342
-        },
-        "start": {
-          "column": 1,
-          "index": 5984,
-          "line": 342
-        }
-      }
-    },
-    {
-      "file": "/storage/emulated/0/CodeOnTheGoProjects/Nexus/app/src/main/assets/web/engines/emotion-engine.js",
-      "selection": {
-        "end": {
-          "column": 1,
-          "index": 8310,
-          "line": 493
-        },
-        "start": {
-          "column": 1,
-          "index": 8310,
-          "line": 493
+          "column": 73,
+          "index": 480,
+          "line": 13
         }
       }
     }
   ],
   "projectPath": "/storage/emulated/0/CodeOnTheGoProjects/Nexus",
-  "selectedFile": "/storage/emulated/0/CodeOnTheGoProjects/Nexus/app/src/main/assets/web/engines/emotion-engine.js"
+  "selectedFile": "/storage/emulated/0/CodeOnTheGoProjects/Nexus/app/src/main/java/com/glydexstudio/nexus/config/NexusConfig.kt"
 }

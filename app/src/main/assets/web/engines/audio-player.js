@@ -1,9 +1,9 @@
 /**
- * Audio Engine - reda MP3-ul primit de la ElevenLabs (base64, prin bridge)
- * prin Web Audio API, ca lip sync-ul sa poata analiza semnalul real.
+ * Nexus Audio Engine
  *
- * Daca decodarea esueaza, cade pe <audio> simplu; in acest caz lip sync-ul
- * foloseste fallback-ul pe amplitudine simulata, fara sa strice experienta.
+ * Single source of truth for playback timing.
+ * The lip-sync clock is always derived from the exact Web Audio playback clock
+ * (or HTMLAudioElement.currentTime for the fallback path).
  */
 export class AudioEngine {
   constructor() {
@@ -13,9 +13,12 @@ export class AudioEngine {
     this.analyser = null;
     this.fallbackEl = null;
     this.playing = false;
+    this.onPrepared = null;
+    this.onPlaybackStarted = null;
     this.onEnded = null;
     this._token = 0;
     this._startedAt = 0;
+    this._bufferDuration = 0;
     this._playbackRate = 1;
   }
 
@@ -27,18 +30,11 @@ export class AudioEngine {
       this.gain = this.ctx.createGain();
       this.analyser = this.ctx.createAnalyser();
       this.analyser.fftSize = 1024;
-      // Lower smoothing keeps consonant/vowel changes responsive without
-      // making the mouth jitter. The lip-sync engine performs its own
-      // perceptual smoothing.
-      this.analyser.smoothingTimeConstant = 0.18;
-      // IMPORTANT: analyser INAINTE de gain -> lip sync-ul ramane corect
-      // chiar si cand utilizatorul da volumul foarte jos sau pe zero.
+      this.analyser.smoothingTimeConstant = 0.12;
       this.analyser.connect(this.gain);
       this.gain.connect(this.ctx.destination);
     }
-    if (this.ctx.state === 'suspended') {
-      this.ctx.resume().catch(() => {});
-    }
+    if (this.ctx.state === 'suspended') this.ctx.resume().catch(() => {});
     return this.ctx;
   }
 
@@ -46,7 +42,8 @@ export class AudioEngine {
 
   get currentTime() {
     if (this.source && this.ctx) {
-      return Math.max(0, (this.ctx.currentTime - this._startedAt) * this._playbackRate);
+      const t = Math.max(0, (this.ctx.currentTime - this._startedAt) * this._playbackRate);
+      return Math.min(t, this._bufferDuration || t);
     }
     return this.fallbackEl ? Math.max(0, this.fallbackEl.currentTime || 0) : 0;
   }
@@ -61,7 +58,7 @@ export class AudioEngine {
     let buffer;
     try {
       const bytes = this._decodeBase64(base64);
-      buffer = await ctx.decodeAudioData(bytes.buffer);
+      buffer = await ctx.decodeAudioData(bytes.buffer.slice(0));
     } catch (_) {
       return this._playFallback(base64, volume, rate, token);
     }
@@ -70,20 +67,29 @@ export class AudioEngine {
     try {
       const src = ctx.createBufferSource();
       src.buffer = buffer;
-      src.playbackRate.value = Math.max(0.6, Math.min(1.6, rate));
+      src.playbackRate.value = Math.max(0.6, Math.min(1.6, Number(rate) || 1));
       this._playbackRate = src.playbackRate.value;
-      this.gain.gain.value = Math.max(0, Math.min(1, volume));
+      this._bufferDuration = buffer.duration;
+      this.gain.gain.value = Math.max(0, Math.min(1, Number(volume) || 0));
       src.connect(this.analyser);
+
+      // Lip-sync attaches before playback starts, so no beginning frames are missed.
+      if (typeof this.onPrepared === 'function') {
+        try { this.onPrepared(this.analyser, this.sampleRate, this._bufferDuration); } catch (_) {}
+      }
+
       src.onended = () => {
         if (token !== this._token) return;
         this.playing = false;
         this.source = null;
         if (this.onEnded) this.onEnded();
       };
+
+      this._startedAt = ctx.currentTime;
       src.start(0);
-      this._startedAt = this.ctx.currentTime;
       this.source = src;
       this.playing = true;
+      if (this.onPlaybackStarted) this.onPlaybackStarted();
       return true;
     } catch (_) {
       return this._playFallback(base64, volume, rate, token);
@@ -93,9 +99,31 @@ export class AudioEngine {
   _playFallback(base64, volume, rate, token) {
     try {
       const el = new Audio('data:audio/mpeg;base64,' + base64);
-      el.volume = Math.max(0, Math.min(1, volume));
-      el.playbackRate = Math.max(0.6, Math.min(1.6, rate));
+      el.volume = Math.max(0, Math.min(1, Number(volume) || 0));
+      el.playbackRate = Math.max(0.6, Math.min(1.6, Number(rate) || 1));
       this._playbackRate = el.playbackRate;
+      this._bufferDuration = 0;
+
+      // When AudioContext exists, keep the analyser in the fallback path too.
+      // This means lip-sync still follows the real waveform instead of a fake oscillator.
+      let fallbackAnalyser = null;
+      if (this.ctx && this.analyser) {
+        try {
+          const media = this.ctx.createMediaElementSource(el);
+          media.connect(this.analyser);
+          fallbackAnalyser = this.analyser;
+        } catch (_) {}
+      }
+
+      if (typeof this.onPrepared === 'function') {
+        try { this.onPrepared(fallbackAnalyser, this.sampleRate, 0); } catch (_) {}
+      }
+
+      el.onplay = () => {
+        if (token !== this._token) return;
+        this.playing = true;
+        if (this.onPlaybackStarted) this.onPlaybackStarted();
+      };
       el.onended = () => {
         if (token !== this._token) return;
         this.playing = false;
@@ -108,13 +136,17 @@ export class AudioEngine {
         this.fallbackEl = null;
         if (this.onEnded) this.onEnded();
       };
+
       this.fallbackEl = el;
-      this.playing = true;
-      el.play().catch(() => {
-        this.playing = false;
-        this.fallbackEl = null;
-        if (this.onEnded) this.onEnded();
-      });
+      const promise = el.play();
+      if (promise && typeof promise.catch === 'function') {
+        promise.catch(() => {
+          if (token !== this._token) return;
+          this.playing = false;
+          this.fallbackEl = null;
+          if (this.onEnded) this.onEnded();
+        });
+      }
       return true;
     } catch (_) {
       this.playing = false;
@@ -123,13 +155,10 @@ export class AudioEngine {
     }
   }
 
-  /** Analyser real doar cand redam prin Web Audio (altfel lip sync pe fallback). */
-  getAnalyser() {
-    return this.source ? this.analyser : null;
-  }
+  getAnalyser() { return this.source ? this.analyser : null; }
 
   setVolume(v) {
-    const vol = Math.max(0, Math.min(1, v));
+    const vol = Math.max(0, Math.min(1, Number(v) || 0));
     if (this.gain) this.gain.gain.value = vol;
     if (this.fallbackEl) this.fallbackEl.volume = vol;
   }
@@ -143,10 +172,12 @@ export class AudioEngine {
     }
     if (this.fallbackEl) {
       try { this.fallbackEl.pause(); } catch (_) {}
+      try { this.fallbackEl.src = ''; } catch (_) {}
       this.fallbackEl = null;
     }
     this.playing = false;
     this._startedAt = 0;
+    this._bufferDuration = 0;
   }
 
   suspend() {

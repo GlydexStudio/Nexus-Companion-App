@@ -21,10 +21,6 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
 import com.glydexstudio.nexus.ai.FriendlyErrors
 import com.glydexstudio.nexus.ai.NexusBrain
 import com.glydexstudio.nexus.bridge.NexusBridge
@@ -35,7 +31,11 @@ import com.glydexstudio.nexus.memory.MemoryStore
 import com.glydexstudio.nexus.settings.SettingsStore
 import com.glydexstudio.nexus.voice.ElevenLabsClient
 import com.glydexstudio.nexus.voice.SpeechInput
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 import java.io.ByteArrayInputStream
@@ -52,58 +52,40 @@ class MainActivity : AppCompatActivity(), NexusBridge.Host {
     private lateinit var speech: SpeechInput
     private val eleven = ElevenLabsClient()
     private var camera: FrameCapture? = null
-
     private var webReady = false
     private var turnJob: Job? = null
     private var pendingMicAfterPermission = false
-
-    /** Scope propriu, anulat in onDestroy - nu depinde de lifecycle-runtime-ktx. */
     private val scope = CoroutineScope(Dispatchers.Main.immediate + SupervisorJob())
 
-    private val micPermission = registerForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        if (granted && pendingMicAfterPermission) {
-            startListening()
-        } else if (!granted) {
-            emitError(FriendlyErrors.Case.MIC_DENIED)
-            emitState(listening = false)
-        }
+    private val micPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted && pendingMicAfterPermission) startListening()
+        else if (!granted) { emitError(FriendlyErrors.Case.MIC_DENIED); emitState(listening = false) }
         pendingMicAfterPermission = false
     }
 
-    private val cameraPermission = registerForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { granted ->
+    private val cameraPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         settings.set(SettingsStore.CAMERA_ACCESS, granted)
         if (!granted) emitError(FriendlyErrors.Case.CAMERA_DENIED)
         requestSettings()
     }
 
-    // ------------------------------------------------------------------
-    // Lifecycle
-    // ------------------------------------------------------------------
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         WindowCompat.setDecorFitsSystemWindows(window, false)
         setContentView(R.layout.activity_main)
-
         settings = SettingsStore(this)
         memory = MemoryStore(this)
         conversation = ConversationStore(this)
         brain = NexusBrain(this, settings, memory, conversation)
         speech = SpeechInput(this)
         camera = FrameCapture()
-
         webView = findViewById(R.id.webView)
         configureWebView()
         webView.loadUrl("$ASSET_ORIGIN/web/index.html")
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
-            override fun handleOnBackPressed() {
-                if (webReady) emit("back", JSONObject()) else finish()
-            }
+            override fun handleOnBackPressed() { if (webReady) emit("back", JSONObject()) else finish() }
         })
     }
 
@@ -125,47 +107,26 @@ class MainActivity : AppCompatActivity(), NexusBridge.Host {
             builtInZoomControls = false
             textZoom = 100
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            webView.settings.safeBrowsingEnabled = false
-        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) webView.settings.safeBrowsingEnabled = false
         webView.isVerticalScrollBarEnabled = false
         webView.isHorizontalScrollBarEnabled = false
         webView.overScrollMode = View.OVER_SCROLL_NEVER
-
         webView.addJavascriptInterface(NexusBridge(this), "NexusNative")
-
         webView.webViewClient = object : WebViewClient() {
-            override fun shouldInterceptRequest(
-                view: WebView?,
-                request: WebResourceRequest?
-            ): WebResourceResponse? {
+            override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
                 val url = request?.url ?: return null
                 if (url.host != ASSET_HOST) return null
                 return serveAsset(url)
             }
-
-            override fun shouldOverrideUrlLoading(
-                view: WebView?,
-                request: WebResourceRequest?
-            ): Boolean = true // fara navigare externa
-
-            override fun onRenderProcessGone(
-                view: WebView?,
-                detail: android.webkit.RenderProcessGoneDetail?
-            ): Boolean {
-                // In loc de crash: reincarcam interfata.
+            override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean = true
+            override fun onRenderProcessGone(view: WebView?, detail: android.webkit.RenderProcessGoneDetail?): Boolean {
                 webReady = false
-                try { webView.loadUrl("$ASSET_ORIGIN/web/index.html") } catch (_: Throwable) { }
+                try { webView.loadUrl("$ASSET_ORIGIN/web/index.html") } catch (_: Throwable) {}
                 return true
             }
         }
-
         webView.webChromeClient = object : WebChromeClient() {
-            override fun onPermissionRequest(request: PermissionRequest?) {
-                // Nu dam WebView-ului acces la hardware; audio/camera sunt gestionate nativ.
-                request?.deny()
-            }
-
+            override fun onPermissionRequest(request: PermissionRequest?) { request?.deny() }
             override fun onConsoleMessage(msg: ConsoleMessage?): Boolean {
                 msg?.let { Log.d(TAG, "web: ${it.message()} @${it.lineNumber()}") }
                 return true
@@ -173,7 +134,6 @@ class MainActivity : AppCompatActivity(), NexusBridge.Host {
         }
     }
 
-    /** Serveste assets prin https:// pentru ca ES modules + WebGL sa functioneze corect. */
     private fun serveAsset(url: Uri): WebResourceResponse? {
         val path = url.path?.trimStart('/') ?: return null
         if (path.contains("..")) return null
@@ -181,22 +141,14 @@ class MainActivity : AppCompatActivity(), NexusBridge.Host {
             val stream = assets.open(path)
             WebResourceResponse(mimeOf(path), "UTF-8", 200, "OK", corsHeaders(), stream)
         } catch (_: IOException) {
-            WebResourceResponse(
-                "text/plain", "UTF-8", 404, "Not Found",
-                corsHeaders(), ByteArrayInputStream(ByteArray(0))
-            )
+            WebResourceResponse("text/plain", "UTF-8", 404, "Not Found", corsHeaders(), ByteArrayInputStream(ByteArray(0)))
         }
     }
 
-    private fun corsHeaders() = mapOf(
-        "Access-Control-Allow-Origin" to "*",
-        "Cache-Control" to "no-cache"
-    )
-
+    private fun corsHeaders() = mapOf("Access-Control-Allow-Origin" to "*", "Cache-Control" to "no-cache")
     private fun mimeOf(path: String): String = when {
         path.endsWith(".html") -> "text/html"
-        path.endsWith(".js") -> "text/javascript"
-        path.endsWith(".mjs") -> "text/javascript"
+        path.endsWith(".js") || path.endsWith(".mjs") -> "text/javascript"
         path.endsWith(".css") -> "text/css"
         path.endsWith(".json") -> "application/json"
         path.endsWith(".png") -> "image/png"
@@ -212,50 +164,34 @@ class MainActivity : AppCompatActivity(), NexusBridge.Host {
         super.onPause()
         speech.cancel()
         if (webReady) emit("appPaused", JSONObject())
-        try { webView.onPause() } catch (_: Throwable) { }
+        try { webView.onPause() } catch (_: Throwable) {}
         webView.pauseTimers()
     }
 
     override fun onResume() {
         super.onResume()
         webView.resumeTimers()
-        try { webView.onResume() } catch (_: Throwable) { }
+        try { webView.onResume() } catch (_: Throwable) {}
         if (webReady) emit("appResumed", JSONObject())
     }
 
     override fun onDestroy() {
-        turnJob?.cancel()
-        scope.cancel()
-        speech.release()
-        camera?.shutdown()
-        camera = null
+        turnJob?.cancel(); scope.cancel(); speech.release(); camera?.shutdown(); camera = null
         try {
             webView.removeJavascriptInterface("NexusNative")
             webView.loadUrl("about:blank")
             (webView.parent as? android.view.ViewGroup)?.removeView(webView)
             webView.destroy()
-        } catch (_: Throwable) { }
+        } catch (_: Throwable) {}
         super.onDestroy()
     }
 
-    // ------------------------------------------------------------------
-    // Android -> JS
-    // ------------------------------------------------------------------
     private fun emit(event: String, payload: JSONObject) {
-        val js = "window.NexusHost && window.NexusHost.emit(${JSONObject.quote(event)}," +
-            "${payload});"
-        runOnUiThread {
-            try {
-                webView.evaluateJavascript(js, null)
-            } catch (_: Throwable) { }
-        }
+        val js = "window.NexusHost && window.NexusHost.emit(${JSONObject.quote(event)},${payload});"
+        runOnUiThread { try { webView.evaluateJavascript(js, null) } catch (_: Throwable) {} }
     }
 
-    private fun emitState(
-        listening: Boolean? = null,
-        thinking: Boolean? = null,
-        speaking: Boolean? = null
-    ) {
+    private fun emitState(listening: Boolean? = null, thinking: Boolean? = null, speaking: Boolean? = null) {
         val o = JSONObject()
         listening?.let { o.put("listening", it) }
         thinking?.let { o.put("thinking", it) }
@@ -263,39 +199,35 @@ class MainActivity : AppCompatActivity(), NexusBridge.Host {
         emit("state", o)
     }
 
-    private fun emitError(case: FriendlyErrors.Case) {
-        emit(
-            "notice",
-            JSONObject()
-                .put("message", FriendlyErrors.message(case, brain.lastLanguage))
-                .put("kind", case.name.lowercase())
-        )
+    private fun emitError(case: FriendlyErrors.Case) =
+        emit("notice", JSONObject().put("message", FriendlyErrors.message(case, brain.lastLanguage)).put("kind", case.name.lowercase()))
+
+    private fun emitModelConfig() {
+        val model = NexusConfig.normalizedAvatarModel(settings.getString(SettingsStore.AVATAR_MODEL))
+        emit("modelConfig", JSONObject()
+            .put("modelId", model)
+            .put("name", NexusConfig.avatarDisplayName(model))
+            .put("avatarUrl", "$ASSET_ORIGIN/${NexusConfig.avatarFileForModel(model)}"))
     }
 
-    // ------------------------------------------------------------------
-    // Bridge (JS -> Android)
-    // ------------------------------------------------------------------
     override fun onWebReady() {
         runOnUiThread {
             webReady = true
-            requestSettings()
-            requestConversation()
-            requestMemory()
-            emit(
-                "config",
-                JSONObject()
-                    .put("gumloop", NexusConfig.gumloopReady())
-                    .put("voice", NexusConfig.elevenReady())
-                    .put("speech", speech.available())
-                    .put("avatarUrl", "$ASSET_ORIGIN/avatars/nexus.vrm")
-            )
+            requestSettings(); requestConversation(); requestMemory()
+            val model = NexusConfig.normalizedAvatarModel(settings.getString(SettingsStore.AVATAR_MODEL))
+            emit("config", JSONObject()
+                .put("gumloop", NexusConfig.gumloopReady())
+                .put("voice", NexusConfig.elevenReady())
+                .put("speech", speech.available())
+                .put("modelId", model)
+                .put("modelName", NexusConfig.avatarDisplayName(model))
+                .put("avatarUrl", "$ASSET_ORIGIN/${NexusConfig.avatarFileForModel(model)}"))
             if (!NexusConfig.gumloopReady()) emitError(FriendlyErrors.Case.NOT_CONFIGURED)
         }
     }
 
     override fun sendMessage(text: String) {
-        val clean = text.trim()
-        if (clean.isEmpty()) return
+        val clean = text.trim(); if (clean.isEmpty()) return
         runOnUiThread { runTurn(clean) }
     }
 
@@ -303,13 +235,11 @@ class MainActivity : AppCompatActivity(), NexusBridge.Host {
         turnJob?.cancel()
         emit("userMessage", JSONObject().put("text", userText))
         emitState(listening = false, thinking = true, speaking = false)
-
         turnJob = scope.launch {
             try {
                 val vision = maybeCaptureFrame()
                 val outcome = brain.respond(userText, vision)
                 emitState(thinking = false)
-
                 when (outcome) {
                     is NexusBrain.Outcome.Success -> {
                         val r = outcome.response
@@ -317,28 +247,17 @@ class MainActivity : AppCompatActivity(), NexusBridge.Host {
                         speakIfPossible(r.text, r.emotion, r.intensity)
                     }
                     is NexusBrain.Outcome.Failure -> {
-                        // motivul tehnic exact ajunge in logcat (filtreaza dupa tag-ul "Nexus"),
-                        // in timp ce utilizatorul vede doar un mesaj natural
                         Log.w(TAG, "Gumloop [${outcome.case}] ${outcome.detail}")
-                        emit(
-                            "nexusResponse",
-                            JSONObject()
-                                .put("text", outcome.message)
-                                .put("emotion", "relaxed")
-                                .put("intensity", 0.4)
-                                .put("behavior", "concerned")
-                                .put("lookAt", JSONObject().put("yaw", 0).put("pitch", 0))
-                                .put("silent", true)
-                        )
+                        emit("nexusResponse", JSONObject()
+                            .put("text", outcome.message).put("emotion", "relaxed").put("intensity", 0.4)
+                            .put("behavior", "concerned").put("lookAt", JSONObject().put("yaw", 0).put("pitch", 0)).put("silent", true))
                         emitState(speaking = false)
                     }
                 }
             } catch (_: CancellationException) {
                 emitState(thinking = false, speaking = false)
             } catch (t: Throwable) {
-                Log.w(TAG, "turn failed", t)
-                emitState(thinking = false, speaking = false)
-                emitError(FriendlyErrors.Case.AI_DOWN)
+                Log.w(TAG, "turn failed", t); emitState(thinking = false, speaking = false); emitError(FriendlyErrors.Case.AI_DOWN)
             }
         }
     }
@@ -347,150 +266,93 @@ class MainActivity : AppCompatActivity(), NexusBridge.Host {
         if (!settings.getBool(SettingsStore.VOICE_ENABLED)) { emitState(speaking = false); return }
         if (!NexusConfig.elevenReady()) { emitState(speaking = false); return }
 
-        when (val res = eleven.speak(text, emotion, intensity)) {
-            is ElevenLabsClient.Result.Ok -> {
-                emit(
-                    "audio",
-                    JSONObject()
-                        .put("mime", "audio/mpeg")
-                        .put("data", res.base64Mp3)
-                        .putOpt("alignment", res.alignment)
-                        .put("volume", settings.getFloat(SettingsStore.VOICE_VOLUME).toDouble())
-                        .put("rate", settings.getFloat(SettingsStore.SPEECH_RATE).toDouble())
-                )
-            }
+        val model = NexusConfig.normalizedAvatarModel(settings.getString(SettingsStore.AVATAR_MODEL))
+        val voiceId = NexusConfig.voiceIdForModel(model)
+        if (voiceId.isBlank() || voiceId.startsWith("PUNE_AICI")) {
+            Log.w(TAG, "Voice ID missing for avatar=$model")
+            emitState(speaking = false)
+            emitError(FriendlyErrors.Case.VOICE_DOWN)
+            return
+        }
+
+        when (val res = eleven.speak(text, emotion, intensity, voiceId)) {
+            is ElevenLabsClient.Result.Ok -> emit("audio", JSONObject()
+                .put("mime", "audio/mpeg")
+                .put("data", res.base64Mp3)
+                .putOpt("alignment", res.alignment)
+                .put("volume", settings.getFloat(SettingsStore.VOICE_VOLUME).toDouble())
+                .put("rate", settings.getFloat(SettingsStore.SPEECH_RATE).toDouble()))
             is ElevenLabsClient.Result.Err -> {
                 emitState(speaking = false)
-                if (res.kind != ElevenLabsClient.Kind.NOT_CONFIGURED) {
-                    emitError(FriendlyErrors.Case.VOICE_DOWN)
-                }
+                if (res.kind != ElevenLabsClient.Kind.NOT_CONFIGURED) emitError(FriendlyErrors.Case.VOICE_DOWN)
             }
         }
     }
 
     private suspend fun maybeCaptureFrame(): String? {
         if (!settings.getBool(SettingsStore.CAMERA_ACCESS)) return null
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
-            != PackageManager.PERMISSION_GRANTED
-        ) return null
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) return null
         val cam = camera ?: return null
         return kotlinx.coroutines.withTimeoutOrNull(2500) {
             kotlinx.coroutines.suspendCancellableCoroutine<String?> { cont ->
-                try {
-                    cam.captureFrontFrame(this@MainActivity) { b64 ->
-                        if (cont.isActive) cont.resume(b64) { }
-                    }
-                } catch (_: Throwable) {
-                    if (cont.isActive) cont.resume(null) { }
-                }
+                try { cam.captureFrontFrame(this@MainActivity) { b64 -> if (cont.isActive) cont.resume(b64) {} } }
+                catch (_: Throwable) { if (cont.isActive) cont.resume(null) {} }
             }
         }
     }
 
     override fun startListening() {
         runOnUiThread {
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
-                != PackageManager.PERMISSION_GRANTED
-            ) {
-                pendingMicAfterPermission = true
-                micPermission.launch(Manifest.permission.RECORD_AUDIO)
-                return@runOnUiThread
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                pendingMicAfterPermission = true; micPermission.launch(Manifest.permission.RECORD_AUDIO); return@runOnUiThread
             }
             if (!speech.available()) { emitError(FriendlyErrors.Case.MIC_DENIED); return@runOnUiThread }
-
-            emit("stopAudio", JSONObject())
-            emitState(listening = true, speaking = false)
-
+            emit("stopAudio", JSONObject()); emitState(listening = true, speaking = false)
             speech.start(settings.recognizerLocale(brain.lastLanguage), object : SpeechInput.Callbacks {
                 override fun onReady() = emitState(listening = true)
-                override fun onLevel(rms: Float) =
-                    emit("micLevel", JSONObject().put("level", rms.toDouble()))
-
-                override fun onPartial(text: String) =
-                    emit("partial", JSONObject().put("text", text))
-
-                override fun onFinal(text: String) {
-                    emitState(listening = false)
-                    runTurn(text)
-                }
-
+                override fun onLevel(rms: Float) = emit("micLevel", JSONObject().put("level", rms.toDouble()))
+                override fun onPartial(text: String) = emit("partial", JSONObject().put("text", text))
+                override fun onFinal(text: String) { emitState(listening = false); runTurn(text) }
                 override fun onEnd() = emitState(listening = false)
-
-                override fun onFailure(permanent: Boolean) {
-                    emitState(listening = false)
-                    emitError(FriendlyErrors.Case.MIC_DENIED)
-                }
+                override fun onFailure(permanent: Boolean) { emitState(listening = false); emitError(FriendlyErrors.Case.MIC_DENIED) }
             })
         }
     }
 
-    override fun stopListening() {
-        runOnUiThread {
-            speech.stop()
-            emitState(listening = false)
-        }
-    }
+    override fun stopListening() { runOnUiThread { speech.stop(); emitState(listening = false) } }
 
-    override fun cancelSpeaking() {
-        runOnUiThread {
-            turnJob?.cancel()
-            emit("stopAudio", JSONObject())
-            emitState(thinking = false, speaking = false)
-        }
-    }
-
-    override fun requestSettings() {
-        runOnUiThread { emit("settings", settings.toJson()) }
-    }
+    override fun cancelSpeaking() { runOnUiThread { turnJob?.cancel(); emit("stopAudio", JSONObject()); emitState(thinking = false, speaking = false) } }
+    override fun requestSettings() { runOnUiThread { emit("settings", settings.toJson()) } }
 
     override fun updateSetting(key: String, value: String) {
         runOnUiThread {
-            if (key == SettingsStore.CAMERA_ACCESS && (value == "true" || value == "1")) {
-                if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
-                    != PackageManager.PERMISSION_GRANTED
-                ) {
-                    cameraPermission.launch(Manifest.permission.CAMERA)
-                    return@runOnUiThread
-                }
+            if (key == SettingsStore.CAMERA_ACCESS && (value == "true" || value == "1") &&
+                ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+                cameraPermission.launch(Manifest.permission.CAMERA); return@runOnUiThread
             }
+
+            if (key == SettingsStore.AVATAR_MODEL) {
+                val model = NexusConfig.normalizedAvatarModel(value)
+                turnJob?.cancel()
+                emit("stopAudio", JSONObject())
+                emitState(thinking = false, speaking = false)
+                settings.set(key, model)
+                requestSettings()
+                emitModelConfig()
+                return@runOnUiThread
+            }
+
             settings.set(key, value)
             requestSettings()
         }
     }
 
-    override fun requestConversation() {
-        runOnUiThread {
-            emit("conversation", JSONObject().put("items", conversation.toJsonArray()))
-        }
-    }
-
-    override fun clearConversation() {
-        runOnUiThread {
-            conversation.clear()
-            requestConversation()
-        }
-    }
-
-    override fun requestMemory() {
-        runOnUiThread { emit("memory", JSONObject().put("items", memory.toJsonArray())) }
-    }
-
-    override fun resetMemory() {
-        runOnUiThread {
-            memory.reset()
-            requestMemory()
-        }
-    }
-
-    override fun forgetFact(text: String) {
-        runOnUiThread {
-            memory.remove(text)
-            requestMemory()
-        }
-    }
-
-    override fun setCameraEnabled(enabled: Boolean) =
-        updateSetting(SettingsStore.CAMERA_ACCESS, enabled.toString())
+    override fun requestConversation() { runOnUiThread { emit("conversation", JSONObject().put("items", conversation.toJsonArray())) } }
+    override fun clearConversation() { runOnUiThread { conversation.clear(); requestConversation() } }
+    override fun requestMemory() { runOnUiThread { emit("memory", JSONObject().put("items", memory.toJsonArray())) } }
+    override fun resetMemory() { runOnUiThread { memory.reset(); requestMemory() } }
+    override fun forgetFact(text: String) { runOnUiThread { memory.remove(text); requestMemory() } }
+    override fun setCameraEnabled(enabled: Boolean) = updateSetting(SettingsStore.CAMERA_ACCESS, enabled.toString())
 
     override fun onSpeakingFinished() {
         runOnUiThread {
@@ -499,18 +361,9 @@ class MainActivity : AppCompatActivity(), NexusBridge.Host {
         }
     }
 
-    override fun onAvatarFailed(reason: String) {
-        Log.w(TAG, "avatar failed: $reason")
-        runOnUiThread { emitError(FriendlyErrors.Case.AVATAR_FAILED) }
-    }
-
-    override fun onBackResult(handled: Boolean) {
-        if (!handled) runOnUiThread { finish() }
-    }
-
-    override fun logFromWeb(message: String) {
-        Log.d(TAG, "web: $message")
-    }
+    override fun onAvatarFailed(reason: String) { Log.w(TAG, "avatar failed: $reason"); runOnUiThread { emitError(FriendlyErrors.Case.AVATAR_FAILED) } }
+    override fun onBackResult(handled: Boolean) { if (!handled) runOnUiThread { finish() } }
+    override fun logFromWeb(message: String) { Log.d(TAG, "web: $message") }
 
     companion object {
         private const val TAG = "Nexus"
