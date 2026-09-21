@@ -14,8 +14,8 @@ object NexusConfig {
     // ------------------------------------------------------------------
     // GUMLOOP  (creierul conversational - agentul "Nexus Chat")
     // ------------------------------------------------------------------
-    const val GUMLOOP_API_KEY: String = "7cc58ae3e73c43818bfc18a1f8b3a1ab"
-    const val GUMLOOP_USER_ID: String = "NW3NV1w5VCUQD183D6vK5ZDVDfG3"
+    const val GUMLOOP_API_KEY: String = ""
+    const val GUMLOOP_USER_ID: String = ""
 
     /**
      * ID-ul agentului "Nexus Chat" (gummie_id).
@@ -23,7 +23,7 @@ object NexusConfig {
      *   https://www.gumloop.com/agents/XXXXXXXX
      * XXXXXXXX este valoarea de pus aici. Fara https://, fara slash-uri.
      */
-    const val GUMLOOP_AGENT_ID: String = "gwURs4aGNL6sDUSnXr6rRp"
+    const val GUMLOOP_AGENT_ID: String = ""
 
     /** Optional: doar daca agentul apartine unui workspace/team, altfel lasa gol. */
     const val GUMLOOP_PROJECT_ID: String = ""
@@ -37,7 +37,7 @@ object NexusConfig {
     // ------------------------------------------------------------------
     // ELEVENLABS  (vocea feminina a lui Nexus)
     // ------------------------------------------------------------------
-    const val ELEVEN_API_KEY: String = "sk_6d86b4805f54f4a145a158ae918da51b304c67b051a9f936"
+    const val ELEVEN_API_KEY: String = ""
 
     /**
      * Voice ID feminin, tanar (20-27 ani), cald si expresiv.
